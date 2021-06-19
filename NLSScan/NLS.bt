@@ -1,0 +1,81 @@
+//------------------------------------------------
+//--- 010 Editor v11.0.1 Binary Template
+//
+//      File: NLS.bt
+//   Authors: HTC (TQN) - VinCSS (a member of Vingroup)
+//   Version: 1.0
+//   Purpose: Dump NLS content file C_xxxxx.nls
+//  Category: Operating System
+// File Mask: *.nls
+//  ID Bytes:
+//   History:
+//   1.0   2021-06-14 HTC: Initial release
+//------------------------------------------------
+
+// Convert from C code at: https://gist.github.com/ynkdir/b92727e2a52e55a4010f
+
+LittleEndian();
+
+typedef struct
+{
+    WORD wSize; /* in words 0xD */
+    WORD CodePage;
+    WORD MaxCharSize; /* 1 or 2 */
+    BYTE DefaultChar[2];
+    wchar_t UnicodeDefaultChar;
+    wchar_t UnicodeReplaceChar1;
+    wchar_t UnicodeReplaceChar2;
+    BYTE LeadByte[12];
+} NLS_HEADER;
+
+typedef struct
+{
+    WORD data[256];
+} SubTable;
+
+typedef struct
+{
+    WORD offset_of_WC2MB;
+    WORD primary_table[256];
+    WORD oem_table_size;
+    if (oem_table_size > 0)
+    {
+        WORD oem_table[oem_table_size];
+    }
+    WORD num_of_dbcs_leadbyte_range;
+    local int64 curOfs = FTell();
+    if (num_of_dbcs_leadbyte_range != 0)
+    {
+        WORD dbcs_leadbyte_offs[256];
+        local int i;
+        for (i = 0; i < 256; i++)
+        {
+            if (dbcs_leadbyte_offs[i] != 0)
+            {
+                FSeek(curOfs + dbcs_leadbyte_offs[i] * sizeof(WORD));
+                SubTable Table;
+            }
+
+        }
+    }
+} MB2WC;
+
+NLS_HEADER header;
+if (header.wSize != 0xD)
+{
+    Printf( "Invalid NLS file\n" );
+    return 0;
+}
+
+MB2WC mb2wc;
+FSeek(28 + mb2wc.offset_of_WC2MB * sizeof(WORD));
+if (header.MaxCharSize == 1)
+{
+    char WC2MB[65536];
+}
+else
+{
+    wchar_t WC2MB[65536];
+}
+
+return 1;
