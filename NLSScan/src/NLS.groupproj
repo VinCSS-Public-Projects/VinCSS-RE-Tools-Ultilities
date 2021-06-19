@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{866F8574-CDD1-4781-8197-96B40BBDE07C}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="NLSScan.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="CheckCP.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="NLSScan">
+        <MSBuild Projects="NLSScan.dproj"/>
+    </Target>
+    <Target Name="NLSScan:Clean">
+        <MSBuild Projects="NLSScan.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="NLSScan:Make">
+        <MSBuild Projects="NLSScan.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="CheckCP">
+        <MSBuild Projects="CheckCP.dproj"/>
+    </Target>
+    <Target Name="CheckCP:Clean">
+        <MSBuild Projects="CheckCP.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="CheckCP:Make">
+        <MSBuild Projects="CheckCP.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="NLSScan;CheckCP"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="NLSScan:Clean;CheckCP:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="NLSScan:Make;CheckCP:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>
