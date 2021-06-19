@@ -223,7 +223,7 @@ begin
 
   // First check if file name is C_xxxx.nls
   strFName := ExtractFileName(strPath);
-  if (UpCase(strFName[1]) = 'C') and (UpCase(strFName[2]) = '_') then
+  if (UpCase(strFName[1]) = 'C') and (strFName[2] = '_') then
   begin
     iPos := Pos('.', strFName);
     Val(Copy(strFName, 3, iPos - 3), iCodePage, iPos);
@@ -491,7 +491,7 @@ begin
     for I := 0 to iTotalFiles - 1 do
       arrErrCodes[i] := ScanFile(arrInputFiles[I], g_arrCodePages, True)
   else
-    // Run parallel only on Win x86 out because of Redirect error in parallen multithreads on Win x64,
+    // Run parallel only on Win x86 out because of Redirect error in parallel multithreads on Win x64,
     // FileOpen return file not found, I don't know why ??? :(
     // TODO: Fix this bug on Win x64
     TParallel.For(0, iTotalFiles - 1, procedure(idx: Integer)
