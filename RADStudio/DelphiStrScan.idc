@@ -11,7 +11,7 @@
 //            between functions boundary so IDA Strings won't find them
 //  Category: IDC
 //   History:
-//       0.1: 27/05/2020 - HTC - start coding for the first version
+//       0.1: 20/06/2021 - First release
 //=============================================================================
 
 /*
