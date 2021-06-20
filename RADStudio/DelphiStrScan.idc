@@ -405,7 +405,6 @@ static main()
                             (easz + len <= get_func_attr(funcAtStart, FUNCATTR_END)))
                         {
                             DBG_MSG_1("0x%X - Delphi Long string at the end of function\n", ea);
-
                         }
                         strType = LONG_STRING;
                     }
