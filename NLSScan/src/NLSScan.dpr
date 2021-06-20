@@ -560,6 +560,11 @@ begin
 
       WriteToLogAndConsole(@logFile, strErrMsg, bScanWinDir);
 
+      // Ignore bad files which have error code is only OPEN_FILE_ERROR
+      // Avoid delete valid Windows files
+      if arrBadFiles[I].NLSErrCode = [OPEN_FILE_ERROR] then
+        Continue;
+
       if bDelete then
       begin
         strNewPath := TPath.Combine(g_strTempPath, ExtractFileName(strPath));
@@ -580,7 +585,7 @@ begin
 
   if bScanWinDir then
   begin
-    logFile.Write(Format('Scan end at: %s - %s'#13#10, [DateToStr(dtEnd), TimeToStr(dtEnd)]));
+    logFile.Write(Format('Scan end at: %s - %s'#13#10#13#10, [DateToStr(dtEnd), TimeToStr(dtEnd)]));
     logFile.Close;
   end;
 end;
