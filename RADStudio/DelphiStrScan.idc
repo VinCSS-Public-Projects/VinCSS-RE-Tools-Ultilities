@@ -263,6 +263,7 @@ static createLongString(ea)
 
     create_data(ea + 4, FF_DWORD, 4, BADADDR);
     set_cmt(ea + 4, "length", 0);
+    op_dec(ea + 4, 0);
 
     // Creat the NULL terminated string, +1 for NULL char
     del_items(easz, DELIT_SIMPLE, len + 1);
@@ -273,6 +274,7 @@ static createLongString(ea)
 
     set_inf_attr(INF_STRTYPE, oldIDAStrType);
 
+    DBG_MSG_2("0x%X: %s\n", ea + 8, getStringType(LONG_STRING));
     return 1;
 }
 
@@ -316,6 +318,7 @@ static createNewString(ea)
 
     create_data(ea + 4, FF_DWORD, 4, BADADDR);
     set_cmt(ea + 4, "length", 0);
+    op_dec(ea + 4, 0);
 
     // Creat the NULL terminated string, +1 for NULL char
     del_items(easz, DELIT_SIMPLE, (len + 1) * esize);
@@ -326,10 +329,11 @@ static createNewString(ea)
 
     set_inf_attr(INF_STRTYPE, oldIDAStrType);
 
+    DBG_MSG_2("0x%X: %s\n", ea + 8, getStringType(type));
     return 1;
 }
 
-// Check NULL char in the middle of a ansi string
+// Check NULL Ansi char in the middle of a ansi string
 static haveZeroByte(ea, len)
 {
     auto ia;
@@ -340,6 +344,22 @@ static haveZeroByte(ea, len)
             return 1;
         }
     }
+
+    return 0;
+}
+
+// Check NULL Unicode char in the middle of a Unicode string
+static haveZeroWord(ea, len)
+{
+    auto ia;
+    for (ia = ea; ia < ea + len; ia++)
+    {
+        if (0 == get_wide_word(ia))
+        {
+            return 1;
+        }
+    }
+
     return 0;
 }
 
@@ -367,45 +387,50 @@ static main()
         {
             codePage = get_wide_word(ea - 4);
             elemSize = get_wide_word(ea - 2);   // Size in bytes of a character, only can be 1 or 2
+            easz = ea + 8;  // 8 = 2 * sizeof(DWORD)
 
             if (isValidElemSize(elemSize) && isValidCodePage(codePage))
             {
                 // New Delphi string
                 if ((2 == elemSize) && (CP_UTF16_LE == codePage))
                 {
-                    strType = UNICODE_STRING;
+                    if (haveZeroWord(easz, len))
+                    {
+                        DBG_MSG_2("0x%X - len = %d - Possible a Unicode string. NULL wchar_t in the string\n", ea, len);
+                    }
+                    else
+                    {
+                        strType = UNICODE_STRING;
+                    }
                 }
                 else
                 {
-                    // RawByteString and Utf8String internal is 1 byte AnsiString
-                    strType = ANSI_STRING;
+                    if (haveZeroByte(easz, len))
+                    {
+                        DBG_MSG_2("0x%X - len = %d - Possible a Ansi string. NULL char in the string\n", ea, len);
+                    }
+                    else
+                    {
+                        // RawByteString and Utf8String internal is 1 byte AnsiString
+                        strType = ANSI_STRING;
+                    }
                 }
             }
             else
             {
                 // Check for old LongString
-                easz = ea + 8;  // 8 = 2 * sizeof(DWORD)
                 if (0 == get_wide_byte(easz + len))     // we have NULL char at end
                 {
-                    funcAtStart = get_func_attr(ea, FUNCATTR_START);
-                    funcAtEnd = get_func_attr(easz + len, FUNCATTR_START);
-
                     if (haveZeroByte(easz, len))
                     {
                         // Outside a function, print msg, else ignore
-                        if (funcAtStart == BADADDR)
+                        if (BADADDR == get_func_attr(ea, FUNCATTR_START))
                         {
-                            DBG_MSG_2("0x%X - len = %d - Possible not a Long Delphi string. NULL char in the string\n", ea, len);
+                            DBG_MSG_2("0x%X - len = %d - Possible a Long string. NULL char in the string\n", ea, len);
                         }
                     }
                     else
                     {
-                        if ((funcAtStart != BADADDR) && (funcAtEnd != BADADDR) &&
-                            (funcAtStart == funcAtEnd) && (ea > funcAtStart) &&
-                            (easz + len <= get_func_attr(funcAtStart, FUNCATTR_END)))
-                        {
-                            DBG_MSG_1("0x%X - Delphi Long string at the end of function\n", ea);
-                        }
                         strType = LONG_STRING;
                     }
                 }
@@ -414,6 +439,17 @@ static main()
 
         if (NOT_STRING != strType)
         {
+            // Check strings inside functions
+            funcAtStart = get_func_attr(ea, FUNCATTR_START);
+            funcAtEnd = get_func_attr(easz + len, FUNCATTR_START);
+
+            if ((funcAtStart != BADADDR) && (funcAtEnd != BADADDR) &&
+                (funcAtStart == funcAtEnd) && (ea > funcAtStart) &&
+                (easz + len <= get_func_attr(funcAtStart, FUNCATTR_END)))
+            {
+                DBG_MSG_1("0x%X - Delphi string inside function\n", ea);
+            }
+
             ret = 0;
             if (LONG_STRING == strType)
             {
@@ -427,7 +463,6 @@ static main()
             if (1 == ret)
             {
                 nfixed++;
-                DBG_MSG_2("0x%X: %s\n", ea + 8, getStringType(strType));
             }
         }
 
