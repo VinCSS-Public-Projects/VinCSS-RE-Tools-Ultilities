@@ -29,8 +29,6 @@ type
 
   TWow64Redirection = class
   strict private
-    class var FOldValue: Int64;
-    class var FDisableCount: Integer;
     class var FRedirectLoaded: Boolean;
     class var Wow64DisableWow64FsRedirection: TWow64DisableWow64FsRedirection;
     class var Wow64RevertWow64FsRedirection: TWow64RevertWow64FsRedirection;
@@ -83,6 +81,9 @@ const
     'File is a Windows DLL file',
     'File is PE 64bit');
 
+threadvar
+  t_oldValue: Int64;  // Two Wow64Redirect function called in own threads
+
 var
   g_strExePath, g_strExeDir, g_strExeName, g_strTempPath: string;
   g_bWin64: Boolean = False;
@@ -91,9 +92,6 @@ var
 class constructor TWow64Redirection.Create;
 begin
   inherited;
-
-  FOldValue := 0;
-  FDisableCount := 0;
   FRedirectLoaded := False;
   Wow64DisableWow64FsRedirection := nil;
   Wow64RevertWow64FsRedirection := nil;
@@ -116,24 +114,19 @@ begin
       @Wow64DisableWow64FsRedirection := nil;
       @Wow64RevertWow64FsRedirection := nil;
     end;
-    FRedirectLoaded := TRUE;
+    FRedirectLoaded := True;
   end;
   Result := (@Wow64DisableWow64FsRedirection <> nil) and (@Wow64RevertWow64FsRedirection <> nil);
 end;
 
 class function TWow64Redirection.Disable: Boolean;
 begin
-  Result := RedirectLoad and ((FDisableCount > 0) or Wow64DisableWow64FsRedirection(FOldValue));
-  if Result then
-    Inc(FDisableCount);
+  Result := RedirectLoad and Wow64DisableWow64FsRedirection(t_oldValue);
 end;
 
 class function TWow64Redirection.Restore: Boolean;
 begin
-  Result := RedirectLoad and (FDisableCount > 0) and
-    ((FDisableCount > 1) or Wow64RevertWow64FsRedirection(FOldValue));
-  if Result then
-    Dec(FDisableCount);
+  Result := RedirectLoad and Wow64RevertWow64FsRedirection(t_oldValue);
 end;
 
 constructor TLogFile.Create(const strExeDir, strExeName: string);
@@ -486,17 +479,10 @@ begin
   SetLength(arrBadFiles, iTotalFiles);
   WriteLn(Format('Scanning %d files...', [iTotalFiles]));
 
-  if g_bWin64 then
-    // Scan on single, main thread
-    for I := 0 to iTotalFiles - 1 do
-      arrErrCodes[i] := ScanFile(arrInputFiles[I], g_arrCodePages, True)
-  else
-    // Run parallel only on Win x86 out because of Redirect error in parallel multithreads on Win x64,
-    // FileOpen return file not found, I don't know why ??? :(
-    // TODO: Fix this bug on Win x64
+  // Parallel scan
     TParallel.For(0, iTotalFiles - 1, procedure(idx: Integer)
       begin
-        arrErrCodes[idx] := ScanFile(arrInputFiles[idx], g_arrCodePages, False);
+      arrErrCodes[idx] := ScanFile(arrInputFiles[idx], g_arrCodePages, g_bWin64);
       end);
 
   dtEnd := Now; // End time of scanning
@@ -507,9 +493,22 @@ begin
   for I := 0 to iTotalFiles - 1 do
   begin
     if (arrErrCodes[I].NLSErrCode = []) then
+    begin
       // TODO: Need more check NLS files which are valid but placed at sub directories of Systems dir
       // and codepage in supported codepages but not in installed codepages
-      Inc(totalOK)
+      Inc(totalOK);
+    end
+    else if arrErrCodes[I].NLSErrCode = [OPEN_FILE_ERROR] then
+    begin
+      // Ignore bad files which have error code is only OPEN_FILE_ERROR
+      // Avoid delete valid Windows files
+        WriteToLogAndConsole(@logFile, Format('File %s', [arrErrCodes[I].strPath]), bScanWinDir);
+        WriteToLogAndConsole(@logFile, #9 + TErrorDescriptions[OPEN_FILE_ERROR], bScanWinDir);
+        WriteToLogAndConsole(@logFile, Format(#9'Win32 error code = %d: %s',
+                             [arrErrCodes[I].Win32ErrCode, SysErrorMessage(arrErrCodes[I].Win32ErrCode)]),
+                             bScanWinDir);
+        Continue;
+    end
     else
     begin
       Inc(totalBad);
@@ -560,21 +559,37 @@ begin
 
       WriteToLogAndConsole(@logFile, strErrMsg, bScanWinDir);
 
-      // Ignore bad files which have error code is only OPEN_FILE_ERROR
-      // Avoid delete valid Windows files
-      if arrBadFiles[I].NLSErrCode = [OPEN_FILE_ERROR] then
-        Continue;
-
       if bDelete then
       begin
+        if g_bWin64 then
+          TWow64Redirection.Disable;
+
+        try
+          SetFileAttributes(PChar(strPath), FILE_ATTRIBUTE_NORMAL);
+
         strNewPath := TPath.Combine(g_strTempPath, ExtractFileName(strPath));
+          SetFileAttributes(PChar(strNewPath), FILE_ATTRIBUTE_NORMAL);
+
         if CopyFile(PChar(strPath), PChar(strNewPath), False) then
-          WriteToLogAndConsole(@logFile, Format('File copied to %s'#13#10, [strNewPath]), bScanWinDir);
+            WriteToLogAndConsole(@logFile, Format('File %s copied to %s'#13#10, [strPath, strNewPath]),
+                                 bScanWinDir)
+          else
+            WriteToLogAndConsole(@logFile, Format('Could not copy file %s to %s'#13#10'Error: %s'#13#10,
+                                                  [strPath, strNewPath, SysErrorMessage(GetLastError)]),
+                                 bScanWinDir);
+
         if not Winapi.Windows.DeleteFile(PChar(strPath)) then
         begin
           bNeedReboot := True;
           MoveFileEx(PChar(strPath), nil, MOVEFILE_DELAY_UNTIL_REBOOT);
-          WriteToLogAndConsole(@logFile, Format('File %s will be deleted at next reboot'#13#10, [strPath]), bScanWinDir);
+            WriteToLogAndConsole(@logFile, Format('File %s will be deleted at next reboot'#13#10, [strPath]),
+                                 bScanWinDir);
+          end
+          else
+            WriteToLogAndConsole(@logFile, Format('File %s deleted'#13#10, [strPath]), bScanWinDir);
+        finally
+          if g_bWin64 then
+            TWow64Redirection.Disable;
         end;
       end;
     end;
