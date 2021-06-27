@@ -55,13 +55,12 @@ type
   TErrorCodes = (OPEN_FILE_ERROR, FILE_TOO_SMALL, FILENAME_NOT_CONTAIN_CODEPAGE, FILENAME_CODEPAGE_INVALID,
                  NLS_INVALID_HEADER_SIZE, INVALID_CODEPAGE, MISMATCH_TWO_CODEPAGE,
                  INVALID_MAX_CHAR_SIZE, INVALID_TABLE_OFFSET, INVALID_TABLE_DATA,
-                 IS_PE_FILE, IS_DLL, IS_PE64);
+                 IS_PE_FILE, IS_DLL, IS_PE64, FILE_CONTENT_CHANGED);
   TErrorCodeSet = set of TErrorCodes;
 
   TNLSScanResult = record
     NLSErrCode: TErrorCodeSet;
     Win32ErrCode: DWORD;
-    iCodePage: Integer;
     strPath: string;
   end;
 
@@ -79,7 +78,8 @@ const
     'End of Unicode Table is not at end of file',
     'File is a PE (Windows) Executable',
     'File is a Windows DLL file',
-    'File is PE 64bit');
+    'File is PE 64bit',
+    'File content has changed');
 
 threadvar
   t_oldValue: Int64;  // Two Wow64Redirect function called in own threads
@@ -87,7 +87,7 @@ threadvar
 var
   g_strExePath, g_strExeDir, g_strExeName, g_strTempPath: string;
   g_bWin64: Boolean = False;
-  g_arrCodePages: array of Integer = nil;
+  g_arrCodePages: TArray<Integer> = nil;
 
 class constructor TWow64Redirection.Create;
 begin
@@ -197,7 +197,7 @@ begin
     logFile.Write(strMsg + #13#10);
 end;
 
-function ScanFile(const strPath: string; arrCodePages: array of Integer; bRedirect: Boolean): TNLSScanResult;
+function ScanFile(const strPath: string; const arrCodePages: TArray<Integer>; bRedirect: Boolean): TNLSScanResult;
 const
   MAX_SIZE_READ = 4096;
 var
@@ -232,6 +232,7 @@ begin
     TWow64Redirection.Disable;
 
   hFile := FileOpen(strPath, fmOpenRead);
+
   if bRedirect then
     TWow64Redirection.Restore;
 
@@ -241,6 +242,7 @@ begin
     Include(Result.NLSErrCode, OPEN_FILE_ERROR);
     Exit;
   end;
+
   dwFSize := GetFileSize(hFile, nil);
   iRead := FileRead(hFile, abBuf, SizeOf(abBuf));
   FileClose(hFile);
@@ -275,7 +277,6 @@ begin
       if (iCodePage <> 0) and (iCodePage <> PWord(@abBuf[2])^) then
         Include(Result.NLSErrCode, MISMATCH_TWO_CODEPAGE);
     end;
-    Result.iCodePage := iCodePage;
 
     // Check max char size
     var wMaxCharSize: Word := 0;
@@ -356,11 +357,85 @@ begin
   Result := 1;
 end;
 
+function CheckPatchedFile(const strSystem32Dir, strFileCheck: string; bRedirect: Boolean): Boolean;
+var
+  strCheckDir: string;
+  strSystem32File: string;
+  hFileCheck, hFileSystem32: THandle;
+  dwSizeCheck, dwSizeSystem32: DWORD;
+  pMemCheck, pMemSystem32: Pointer;
+begin
+  Result := False;
+  hFileCheck := INVALID_HANDLE_VALUE;
+  hFileSystem32 := INVALID_HANDLE_VALUE;
+  pMemCheck := nil;
+  pMemSystem32 := nil;
+
+  if bRedirect then
+    TWow64Redirection.Disable;
+
+  try
+    strCheckDir := ExtractFilePath(strFileCheck);
+    if SameFileName(strSystem32Dir, strCheckDir) then
+      Exit(False);  // File in System32 dir
+
+    // File in sub directories of SysWow64 and System32.
+    // Check it content with original file in System32
+    strSystem32File := TPath.Combine(strSystem32Dir, ExtractFileName(strFileCheck));
+
+    // We are in Redirect disabled, so do not call FileExistsRedirect
+    if not FileExists(strSystem32File) then
+      Exit(True);  // File moved to sub dir, strange !
+
+    hFileCheck := FileOpen(strFileCheck, fmOpenRead);
+    dwSizeCheck := GetFileSize(hFileCheck, nil);
+    hFileSystem32 := FileOpen(strSystem32File, fmOpenRead);
+    dwSizeSystem32 := GetFileSize(hFileSystem32, nil);
+
+    if dwSizeCheck <> dwSizeSystem32 then
+      Exit(True); // wrong file size, file was patched
+
+    pMemCheck := AllocMem(dwSizeCheck);
+    pMemSystem32 := AllocMem(dwSizeSystem32);
+
+    FileRead(hFileCheck, pMemCheck^, dwSizeCheck);
+    FileRead(hFileSystem32, pMemSystem32^, dwSizeSystem32);
+
+    Result := CompareMem(pMemCheck, pMemSystem32, dwSizeCheck) = False;
+  finally
+    if hFileCheck <> INVALID_HANDLE_VALUE then
+    begin
+      FileClose(hFileCheck);
+      hFileCheck := INVALID_HANDLE_VALUE;
+    end;
+
+    if hFileSystem32 <> INVALID_HANDLE_VALUE then
+    begin
+      FileClose(hFileSystem32);
+      hFileSystem32 := INVALID_HANDLE_VALUE;
+    end;
+
+    if pMemCheck <> nil then
+    begin
+      FreeMem(pMemCheck);
+      pMemCheck := nil;
+    end;
+
+    if pMemSystem32 <> nil then
+    begin
+      FreeMem(pMemSystem32);
+      pMemSystem32 := nil;
+    end;
+
+    TWow64Redirection.Restore;
+  end;
+end;
+
 procedure Intro;
 begin
   WriteTextColor('NLSScan - Scan and detect malwares, that fake Windows C_*.nls files', LIGHTGREEN);
   WriteTextColor('Written by HTC (TQN) - VinCSS(a member of Vingroup)', LIGHTGREEN);
-  WriteTextColor('Version 0.1 - First release'#13#10, LIGHTGREEN);
+  WriteTextColor('Version 1.0 - First release'#13#10, LIGHTGREEN);
   WriteTextColor('Usage: NLSScan [NLSFileName1] ...[NLSFileNameN]', LIGHTGREEN);
   WriteTextColor('If run withthout parameter, scan all C_*.nls files in Windows System directories'#13#10, LIGHTGREEN);
 
@@ -409,8 +484,8 @@ begin
   if bScanWinDir then
   begin
     // Get System32 and SysWow64 path
-    strSystem32 := GetDirFromCSIDL(CSIDL_SYSTEM);
-    strSysWow64 := GetDirFromCSIDL(CSIDL_SYSTEMX86);
+    strSystem32 := IncludeTrailingPathDelimiter(GetDirFromCSIDL(CSIDL_SYSTEM));
+    strSysWow64 := IncludeTrailingPathDelimiter(GetDirFromCSIDL(CSIDL_SYSTEMX86));
 
     // Get list of all C_*.nls files
     if g_bWin64 then
@@ -480,10 +555,10 @@ begin
   WriteLn(Format('Scanning %d files...', [iTotalFiles]));
 
   // Parallel scan
-    TParallel.For(0, iTotalFiles - 1, procedure(idx: Integer)
-      begin
+  TParallel.For(0, iTotalFiles - 1, procedure(idx: Integer)
+    begin
       arrErrCodes[idx] := ScanFile(arrInputFiles[idx], g_arrCodePages, g_bWin64);
-      end);
+    end);
 
   dtEnd := Now; // End time of scanning
 
@@ -493,12 +568,15 @@ begin
   for I := 0 to iTotalFiles - 1 do
   begin
     if (arrErrCodes[I].NLSErrCode = []) then
-    begin
-      // TODO: Need more check NLS files which are valid but placed at sub directories of Systems dir
-      // and codepage in supported codepages but not in installed codepages
-      Inc(totalOK);
-    end
-    else if arrErrCodes[I].NLSErrCode = [OPEN_FILE_ERROR] then
+      if not CheckPatchedFile(strSystem32, arrErrCodes[I].strPath, g_bWin64) then
+      begin
+        Inc(totalOK);
+        Continue;
+      end
+      else
+        Include(arrErrCodes[I].NLSErrCode, FILE_CONTENT_CHANGED);
+
+    if arrErrCodes[I].NLSErrCode = [OPEN_FILE_ERROR] then
     begin
       // Ignore bad files which have error code is only OPEN_FILE_ERROR
       // Avoid delete valid Windows files
@@ -567,10 +645,10 @@ begin
         try
           SetFileAttributes(PChar(strPath), FILE_ATTRIBUTE_NORMAL);
 
-        strNewPath := TPath.Combine(g_strTempPath, ExtractFileName(strPath));
+          strNewPath := TPath.Combine(g_strTempPath, ExtractFileName(strPath));
           SetFileAttributes(PChar(strNewPath), FILE_ATTRIBUTE_NORMAL);
 
-        if CopyFile(PChar(strPath), PChar(strNewPath), False) then
+          if CopyFile(PChar(strPath), PChar(strNewPath), False) then
             WriteToLogAndConsole(@logFile, Format('File %s copied to %s'#13#10, [strPath, strNewPath]),
                                  bScanWinDir)
           else
@@ -578,10 +656,10 @@ begin
                                                   [strPath, strNewPath, SysErrorMessage(GetLastError)]),
                                  bScanWinDir);
 
-        if not Winapi.Windows.DeleteFile(PChar(strPath)) then
-        begin
-          bNeedReboot := True;
-          MoveFileEx(PChar(strPath), nil, MOVEFILE_DELAY_UNTIL_REBOOT);
+          if not Winapi.Windows.DeleteFile(PChar(strPath)) then
+          begin
+            bNeedReboot := True;
+            MoveFileEx(PChar(strPath), nil, MOVEFILE_DELAY_UNTIL_REBOOT);
             WriteToLogAndConsole(@logFile, Format('File %s will be deleted at next reboot'#13#10, [strPath]),
                                  bScanWinDir);
           end
