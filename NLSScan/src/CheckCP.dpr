@@ -6,33 +6,35 @@ uses
   Winapi.Windows, System.SysUtils, System.Generics.Collections;
 
 var
-  g_arrInstalledCodePages: array of Integer = nil;
-  g_arrSupportedCodePages: array of Integer = nil;
+  g_arrInstalledCodePages: TArray<Integer> = nil;
+  g_arrSupportedCodePages: TArray<Integer> = nil;
 
-function EnumInstalledCodePagesProc(pCodePage: PChar): Integer; stdcall;
+function AddCodePage(const pCodePage: PChar; var arrInt: TArray<Integer>): Boolean;
 var
   iCodePage, iCode: Integer;
 begin
+  Result := False;
   Val(pCodePage, iCodePage, iCode);
   if iCode = 0 then
   begin
-    SetLength(g_arrInstalledCodePages, Length(g_arrInstalledCodePages) + 1);
-    g_arrInstalledCodePages[Length(g_arrInstalledCodePages) - 1] := iCodePage;
+    SetLength(arrInt, Length(arrInt) + 1);
+    arrInt[Length(arrInt) - 1] := iCodePage;
+    Result := True;
   end;
-  Result := 1;
+end;
+
+function EnumInstalledCodePagesProc(pCodePage: PChar): Integer; stdcall;
+begin
+  Result := 0;
+  if AddCodePage(pCodePage, g_arrInstalledCodePages) then
+    Result := 1;
 end;
 
 function EnumSupportedCodePagesProc(pCodePage: PChar): Integer; stdcall;
-var
-  iCodePage, iCode: Integer;
 begin
-  Val(pCodePage, iCodePage, iCode);
-  if iCode = 0 then
-  begin
-    SetLength(g_arrSupportedCodePages, Length(g_arrSupportedCodePages) + 1);
-    g_arrSupportedCodePages[Length(g_arrSupportedCodePages) - 1] := iCodePage;
-  end;
-  Result := 1;
+  Result := 0;
+  if AddCodePage(pCodePage, g_arrSupportedCodePages) then
+    Result := 1;
 end;
 
 begin
