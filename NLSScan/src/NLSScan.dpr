@@ -39,6 +39,21 @@ type
     class function Restore: Boolean; static;
   end;
 
+  TSfcIsFileProtected = function(RpcHandle: THandle; ProtFileName: PChar): BOOL; stdcall;
+
+  TSfcCheck = class
+  const
+    SFCDLL = 'sfc.dll';
+  strict private
+    class var FSfcLoaded: Boolean;
+    class var SfcIsFileProtected: TSfcIsFileProtected;
+    class function SfcLoad: Boolean; static;
+    class constructor Create;
+    class destructor Destroy;
+  public
+    class function IsProtected(const strFileName: string): Boolean;
+  end;
+
   PLogFile = ^TLogFile;
   TLogFile = record
   strict private
@@ -89,6 +104,8 @@ var
   g_bWin64: Boolean = False;
   g_arrCodePages: TArray<Integer> = nil;
 
+// TWow64Redirection
+
 class constructor TWow64Redirection.Create;
 begin
   inherited;
@@ -127,6 +144,48 @@ end;
 class function TWow64Redirection.Restore: Boolean;
 begin
   Result := RedirectLoad and Wow64RevertWow64FsRedirection(t_oldValue);
+end;
+
+// TSfcCheck
+
+class constructor TSfcCheck.Create;
+begin
+  inherited;
+  FSfcLoaded := False;
+  SfcIsFileProtected  := nil;
+end;
+
+class function TSfcCheck.SfcLoad: Boolean;
+var
+  hSfc: THandle;
+begin
+  Result := False;
+  if not FSfcLoaded then
+  begin
+    hSfc := LoadLibrary(SFCDLL);
+    if hSfc <> 0 then
+    begin
+      @SfcIsFileProtected := GetProcAddress(hSfc, 'SfcIsFileProtected');
+      FSfcLoaded := True;
+      Result := @SfcIsFileProtected <> nil;
+    end;
+  end;
+end;
+
+class destructor TSfcCheck.Destroy;
+begin
+  if FSfcLoaded then
+  begin
+    FreeLibrary(GetModuleHandle(SFCDLL));
+    FSfcLoaded := False;
+  end;
+end;
+
+class function TSfcCheck.IsProtected(const strFileName: string): Boolean;
+begin
+  Result := False;
+  if SfcLoad then
+    Result := SfcIsFileProtected(0, PChar(strFileName));
 end;
 
 constructor TLogFile.Create(const strExeDir, strExeName: string);
@@ -357,7 +416,7 @@ begin
   Result := 1;
 end;
 
-function CheckPatchedFile(const strSystem32Dir, strFileCheck: string; bRedirect: Boolean): Boolean;
+function FileWasPatched(const strSystem32Dir, strFileCheck: string; bRedirect: Boolean): Boolean;
 var
   strCheckDir: string;
   strSystem32File: string;
@@ -568,24 +627,32 @@ begin
   for I := 0 to iTotalFiles - 1 do
   begin
     if (arrErrCodes[I].NLSErrCode = []) then
-      if not CheckPatchedFile(strSystem32, arrErrCodes[I].strPath, g_bWin64) then
+    begin
+      if not FileWasPatched(strSystem32, arrErrCodes[I].strPath, g_bWin64) then
       begin
         Inc(totalOK);
         Continue;
       end
       else
-        Include(arrErrCodes[I].NLSErrCode, FILE_CONTENT_CHANGED);
+      begin
+        // File was patched or content changed. Check is it a protected file ?
+        if TSfcCheck.IsProtected(arrErrCodes[I].strPath) then
+          Continue
+        else
+          Include(arrErrCodes[I].NLSErrCode, FILE_CONTENT_CHANGED)
+      end;
+    end;
 
     if arrErrCodes[I].NLSErrCode = [OPEN_FILE_ERROR] then
     begin
       // Ignore bad files which have error code is only OPEN_FILE_ERROR
       // Avoid delete valid Windows files
-        WriteToLogAndConsole(@logFile, Format('File %s', [arrErrCodes[I].strPath]), bScanWinDir);
-        WriteToLogAndConsole(@logFile, #9 + TErrorDescriptions[OPEN_FILE_ERROR], bScanWinDir);
-        WriteToLogAndConsole(@logFile, Format(#9'Win32 error code = %d: %s',
-                             [arrErrCodes[I].Win32ErrCode, SysErrorMessage(arrErrCodes[I].Win32ErrCode)]),
-                             bScanWinDir);
-        Continue;
+      WriteToLogAndConsole(@logFile, Format('File %s', [arrErrCodes[I].strPath]), bScanWinDir);
+      WriteToLogAndConsole(@logFile, #9 + TErrorDescriptions[OPEN_FILE_ERROR], bScanWinDir);
+      WriteToLogAndConsole(@logFile, Format(#9'Win32 error code = %d: %s',
+                           [arrErrCodes[I].Win32ErrCode, SysErrorMessage(arrErrCodes[I].Win32ErrCode)]),
+                           bScanWinDir);
+      Continue;
     end
     else
     begin
@@ -600,7 +667,8 @@ begin
   begin
     logFile := TLogFile.Create(g_strExeDir, g_strExeName);
     WriteLn('Log file at ', logFile.LogPath);
-    logFile.Write(Format('Scan begin at: %s - %s'#13#10, [DateToStr(dtStart), TimeToStr(dtStart)]));
+    logFile.Write(Format('Scan begin at: %s'#13#10, [DateTimeToStr(dtStart)]));
+    logFile.Write(Format('Computer info: %s'#13#10, [TOSVersion.ToString]));
   end;
 
   WriteToLogAndConsole(@logFile, Format('Total files OK: %d', [totalOK]));
