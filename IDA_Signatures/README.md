@@ -1,7 +1,9 @@
-## IDA Signature Files for some Crypto Libraries
+## IDA Signature Files for some Opensource Libraries
 
-1-CryptoPP
+1-Crypto: CryptoPP, OpenSSL, LibTom
 
-2-libtomcrypt, libtommath - used in CobaltStrike Beacon
+2-Compress: zlib, aplib, lznt...
 
-3-OpenSSL: libssl and libcrypto 
+3-Image: libpng, libjpeg...
+
+
