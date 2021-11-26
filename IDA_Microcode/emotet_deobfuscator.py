@@ -104,7 +104,89 @@ class CEmotetCFF(optblock_t):
 
                             #process next block
                             break
+                
+                
+                #Update to handle control flow status set like this
+                #v0 = result != 0 ? 61721445 : 200024545;
+                    
+                if mins.opcode == m_add and mins.l.t == mop_d and mins.r.t == mop_n and mins.d.t == mop_r and get_mreg_name(mins.d.r, mins.d.size) == dispatchReg:
+                    subMins1 = mins.l.d
+                    if subMins1.opcode == m_and and subMins1.l.t == mop_d and subMins1.r.t == mop_n:
+                        subMins2 = subMins1.l.d
+                        if subMins2.opcode == m_neg and subMins2.l.t == mop_d:
+                            subMins3 = subMins2.l.d
+                            if subMins3.opcode == m_xdu and subMins3.l.t == mop_d:
+                                subMins4 = subMins3.l.d
+                                if subMins4.opcode == m_setnz and subMins4.l.t == mop_r and subMins4.r.t == mop_n and subMins4.r.value(False) == 0:
+                                    status1 = mins.r.value(False)
+                                    status2 = (mins.r.value(False) + subMins1.r.value(False)) & 0xFFFFFFFF
+                                    if status1 in statusList and status2 in statusList:
+                                        #We need to do 2 thing: Fix current block from 1WAY to 2WAY and insert new block. This is an if/else stament
+                                        if currentBlock.tail.opcode == m_goto:
+                                            currentBlock.make_nop(currentBlock.tail)
+                                        
+                                        for oldDstBlockSerial in currentBlock.succset:
+                                            oldDstBlock = mba.get_mblock(oldDstBlockSerial)
+                                            oldDstBlock.predset._del(currentBlock.serial)
 
+                                        currentBlock.succset.clear()
+                                        
+                                        newDstBlockSerial = statusList[status2]
+                                        if currentBlock.serial not in mba.get_mblock(newDstBlockSerial).predset:
+                                            mba.get_mblock(newDstBlockSerial).predset.push_back(currentBlock.serial)
+                                        
+                                            
+                                        insertedJnzIns = minsn_t(currentBlock.tail.ea)
+                                        insertedJnzIns.opcode = m_jnz
+                                        insertedJnzIns.l = mop_t()
+                                        insertedJnzIns.l.make_reg(subMins4.l.r, 4)
+                                        insertedJnzIns.r = mop_t()
+                                        insertedJnzIns.r.make_number(subMins4.r.value(False), 4)
+                                        insertedJnzIns.d = mop_t()
+                                        insertedJnzIns.d.make_blkref(newDstBlockSerial)
+
+                                        currentBlock.insert_into_block(insertedJnzIns, currentBlock.tail)
+                                        
+                                        #I don't know why currentBlock.type = BLT_2WAY throw exception so set it to BLT_NONE (not computed yet)
+                                        currentBlock.type = BLT_NONE
+                                        currentBlock.succset.push_back(newDstBlockSerial)
+                                            
+                                        #Because new block will be inserted before current block so we use currentBlock.serial + 1
+                                        newInsertedBlock = mba.insert_block(currentBlock.serial + 1)
+                                            
+                                        #After insert new block, We should update block sertial in statusList
+                                        #Old statuses in predset and succset were updated by insert_block even in current block so we don't have to care about it
+                                        for s in statusList:
+                                            if statusList[s] > currentBlock.serial:
+                                                statusList[s] += 1
+                                        
+                                        currentBlock.succset.push_back(newInsertedBlock.serial)
+                                        newInsertedBlock.predset.push_back(currentBlock.serial)
+                                        newGotoBlockSerial = statusList[status1]
+                                        mba.get_mblock(newGotoBlockSerial).predset.push_back(newInsertedBlock.serial)
+                                        insertedGotoIns = minsn_t(currentBlock.tail.ea)
+                                        insertedGotoIns.opcode = m_goto
+                                        insertedGotoIns.l._make_blkref(newGotoBlockSerial)
+                                        insertedGotoIns.r = mop_t()
+                                        insertedGotoIns.d = mop_t()
+                                        newInsertedBlock.insert_into_block(insertedGotoIns, None)
+
+                                            
+                                        newInsertedBlock.succset.push_back(newGotoBlockSerial)
+                                        newInsertedBlock.type = BLT_NONE
+                                        newInsertedBlock.start = currentBlock.start
+                                        newInsertedBlock.end = currentBlock.end
+                                        newInsertedBlock.flags = currentBlock.flags
+                                        newInsertedBlock.mark_lists_dirty()
+                                        
+                                        currentBlock.make_nop(mins)
+                                        currentBlock.mark_lists_dirty()
+                                        
+                                        mba.verify(True)
+                                        fixStatusList.append(status1)
+                                        fixStatusList.append(status2)
+                                        break
+                                        
                 mins = mins.next
         return fixStatusList
 
@@ -118,7 +200,7 @@ class CEmotetCFF(optblock_t):
     def func(self, blk):
         mba = blk.mba
 
-        if mba.maturity != MMAT_LOCOPT:
+        if mba.maturity != MMAT_GLBOPT1:
             self.isOptimize = False
             return 0
 
